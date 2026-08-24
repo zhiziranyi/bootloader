@@ -190,6 +190,8 @@ python .\tools\verify_pkg.py --pkg .\firmware\firmware_v1.2.2_slotA.pkg --pubkey
 
 当前自动测试覆盖分区、串口分区擦写、包结构、签名/CRC、下载状态、W25Q64、App 跳转、试运行确认和发布清单。
 
+最终实板 HIL 验证摘要见 [docs/HIL_FINAL_VALIDATION_2026-08-24.md](docs/HIL_FINAL_VALIDATION_2026-08-24.md)。
+
 ## 安全边界
 
 - 开发密钥仅用于联调；量产前必须生成新 secp256r1 密钥并重刷 Bootloader。
