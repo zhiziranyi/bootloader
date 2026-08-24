@@ -1,0 +1,41 @@
+{
+  "name": "lwip",
+  "version": "2.1.3",
+  "description": "Lightweight IP stack - minimal IPv4 only with DHCP and ICMP",
+  "keywords": "lwip, tcp/ip, ipv4, dhcp, icmp, ethernet",
+  "authors": [
+    {
+      "name": "LWIP Development Team"
+    }
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://git.savannah.nongnu.org/git/lwip.git"
+  },
+  "license": "LGPL-2.1-or-later",
+  "frameworks": "*",
+  "platforms": "*",
+  "headers": [
+    "lwip.h",
+    "lwip/init.h",
+    "lwip/ip.h",
+    "lwip/ip_addr.h",
+    "lwip/netif.h",
+    "lwip/tcp.h",
+    "lwip/udp.h",
+    "lwip/dhcp.h",
+    "lwip/icmp.h",
+    "lwip/dns.h",
+    "lwip/pbuf.h",
+    "lwip/etharp.h",
+    "netif/ethernet.h"
+  ],
+  "build": {
+    "srcFilter": [
+      "+<src/core/*.c>",
+      "+<src/core/ipv4/*.c>",
+      "+<src/netif/ethernet.c>"
+    ],
+    "includeDir": "src/include"
+  }
+}

@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlashSafe Pro · 密钥轮换工作台</title>
+<style>
+  :root {
+    --bg: #0e1420;
+    --panel: #151d2c;
+    --panel2: #1b2436;
+    --line: #26344c;
+    --text: #dbe4f3;
+    --muted: #8b9bb5;
+    --accent: #38bdf8;
+    --ok: #34d399;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --mono: "Cascadia Code", "JetBrains Mono", Consolas, Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 500px at 80% -10%, #1b2b45 0%, var(--bg) 55%);
+    color: var(--text);
+    font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    padding: 20px;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; flex-wrap: wrap; margin-bottom: 18px;
+  }
+  header h1 { font-size: 20px; letter-spacing: .5px; }
+  header h1 span { color: var(--accent); }
+  .status-pill {
+    font: 12px var(--mono); padding: 4px 12px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--panel);
+    color: var(--muted);
+  }
+  .status-pill.running { color: var(--ok); border-color: var(--ok); animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .55; } }
+
+  .cards {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 12px; margin-bottom: 14px;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 14px 16px;
+  }
+  .card .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .card .value { font: 13px var(--mono); word-break: break-all; }
+  .card .value.hash { font-size: 12px; }
+  .card .value.big { font-size: 22px; font-weight: 600; }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 16px; margin-bottom: 14px;
+  }
+  .panel h2 { font-size: 15px; margin-bottom: 12px; color: var(--accent); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  input[type=text] {
+    background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 9px 12px; font: 14px var(--mono); width: 170px;
+    outline: none;
+  }
+  input[type=text]:focus { border-color: var(--accent); }
+  button {
+    border: 0; border-radius: 8px; cursor: pointer; font-weight: 600;
+    padding: 10px 18px; font-size: 14px; transition: .15s;
+  }
+  .btn-primary { background: var(--accent); color: #062033; }
+  .btn-primary:hover { filter: brightness(1.1); }
+  .btn-primary:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-ghost { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+  .btn-ghost:hover { border-color: var(--accent); }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .warn { color: var(--warn); }
+
+  .console {
+    background: #0a0f18; border: 1px solid var(--line); border-radius: 10px;
+    height: 300px; overflow-y: auto; padding: 12px;
+    font: 12px/1.55 var(--mono);
+  }
+  .console .line { white-space: pre-wrap; word-break: break-all; }
+  .console .line .t { color: #51617d; margin-right: 8px; }
+  .console .line.ok { color: var(--ok); }
+  .console .line.err { color: var(--bad); }
+  .console.empty::before { content: "等待操作… 日志将实时显示在这里"; color: var(--muted); }
+
+  .file-list { display: grid; gap: 8px; }
+  .file {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 12px; flex-wrap: wrap;
+  }
+  .file .name { font: 13px var(--mono); word-break: break-all; }
+  .file .meta { font-size: 12px; color: var(--muted); }
+  footer {
+    color: var(--muted); font-size: 12px; margin-top: 18px;
+    border-top: 1px solid var(--line); padding-top: 12px;
+  }
+  footer code { font-family: var(--mono); color: var(--text); }
+
+  @media (max-width: 560px) {
+    body { padding: 12px; }
+    .console { height: 240px; }
+    input[type=text] { width: 100%; }
+    .row button { flex: 1; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>FlashSafe Pro <span>·</span> 密钥轮换工作台</h1>
+    <div id="pill" class="status-pill">状态：未知</div>
+  </header>
+
+  <section class="cards">
+    <div class="card">
+      <div class="label">当前公钥 SHA-256</div>
+      <div id="keyHash" class="value hash">—</div>
+    </div>
+    <div class="card">
+      <div class="label">签名固件包</div>
+      <div id="pkgCount" class="value big">0</div>
+    </div>
+    <div class="card">
+      <div class="label">旧密钥备份</div>
+      <div id="backupCount" class="value big">0</div>
+    </div>
+    <div class="card">
+      <div class="label">最近一次运行</div>
+      <div id="lastRun" class="value">—</div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>一键轮换</h2>
+    <div class="row">
+      <input id="version" type="text" value="1.1.0" spellcheck="false"
+             aria-label="固件版本" title="固件版本 X.Y.Z">
+      <button id="btnRun" class="btn-primary">生成密钥 · 重编译 · 打包 · 验签</button>
+    </div>
+    <div class="hint">
+      自动完成：生成新 secp256r1 密钥 → 备份旧钥 → 更新
+      <code>include/public_key.h</code> → 重编译 Bootloader/App → 重新打包签名
+      → 设备端同款算法验签。烧录请自行在 VSCode 里执行 Upload。
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>运行日志</h2>
+    <div id="console" class="console empty"></div>
+  </section>
+
+  <section class="panel">
+    <h2>下载</h2>
+    <div id="files" class="file-list"></div>
+    <div class="hint">
+      <span class="warn">注意：private_key.pem 是签名私钥，只应在安全环境中下载，
+      严禁随固件发布或提交到代码仓库。</span>
+    </div>
+  </section>
+
+  <footer>
+    启动命令：<code>python tools/webui.py</code> · 服务仅监听本机
+    <code>127.0.0.1:8765</code> · 固件服务器：
+    <code>python tools/fw_server.py --port 8080 --dir ./firmware</code>
+  </footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const consoleEl = $("console");
+let lastLogCount = 0;
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[c]);
+}
+
+function fmtSize(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+  return (n / 1048576).toFixed(2) + " MB";
+}
+
+function renderConsole(logs) {
+  if (!logs || logs.length === 0) {
+    consoleEl.classList.add("empty");
+    return;
+  }
+  const nearBottom = consoleEl.scrollHeight - consoleEl.scrollTop - consoleEl.clientHeight < 40;
+  for (let i = lastLogCount; i < logs.length; i++) {
+    const line = logs[i];
+    const div = document.createElement("div");
+    let cls = "";
+    const text = line.m;
+    if (/error|fail|invalid|错误|失败|拒绝/i.test(text)) cls = "err";
+    else if (/ok|success|complete|完成|通过|valid/i.test(text)) cls = "ok";
+    div.className = "line" + (cls ? " " + cls : "");
+    div.innerHTML = '<span class="t">' + line.t + "</span>" + escapeHtml(text);
+    consoleEl.appendChild(div);
+  }
+  lastLogCount = logs.length;
+  consoleEl.classList.remove("empty");
+  if (nearBottom) consoleEl.scrollTop = consoleEl.scrollHeight;
+}
+
+function renderFiles(data) {
+  const files = [];
+  (data.pkgs || []).forEach((p) => {
+    files.push({
+      name: p.name,
+      meta: fmtSize(p.size) + " · " + p.mtime,
+      href: "/api/download/pkg?name=" + encodeURIComponent(p.name)
+    });
+  });
+  files.push({ name: "public_key.h", meta: "当前内置公钥头文件", href: "/api/download/key" });
+  files.push({
+    name: "private_key.pem", meta: "签名私钥（需确认）",
+    href: "/api/download/private?confirm=1", confirm: true
+  });
+
+  $("files").innerHTML = files.map((f) =>
+    '<div class="file"><div><div class="name">' + escapeHtml(f.name) +
+    '</div><div class="meta">' + escapeHtml(f.meta) + "</div></div>" +
+    '<button class="btn-ghost" data-href="' + f.href + '"' +
+    (f.confirm ? ' data-confirm="1"' : "") + ">下载</button></div>"
+  ).join("");
+
+  document.querySelectorAll("#files button").forEach((btn) => {
+    btn.onclick = () => {
+      if (btn.dataset.confirm &&
+          !confirm("私钥仅限本机安全使用。确认下载 private_key.pem？")) return;
+      window.location.href = btn.dataset.href;
+    };
+  });
+}
+
+function renderStatus(data) {
+  const pill = $("pill");
+  if (data.running) {
+    pill.textContent = "状态：运行中…";
+    pill.className = "status-pill running";
+    $("btnRun").disabled = true;
+  } else {
+    pill.textContent = "状态：" + (data.exit_code === 0
+      ? "空闲（上次成功）" : data.exit_code == null
+        ? "空闲" : "空闲（上次失败 " + data.exit_code + "）");
+    pill.className = "status-pill";
+    $("btnRun").disabled = false;
+  }
+  $("keyHash").textContent = data.key_sha256 || "（未找到公钥文件）";
+  $("pkgCount").textContent = (data.pkgs || []).length;
+  $("backupCount").textContent = (data.backups || []).length;
+  const last = (data.logs || []).slice(-1)[0];
+  $("lastRun").textContent = last ? last.t + " · " + last.m : "—";
+  renderConsole(data.logs);
+  renderFiles(data);
+}
+
+async function refresh() {
+  try {
+    const r = await fetch("/api/status");
+    renderStatus(await r.json());
+  } catch (e) {
+    $("pill").textContent = "状态：无法连接服务器";
+  }
+}
+
+async function runRotation() {
+  const version = $("version").value.trim();
+  if (!/^\d+\.\d+\.\d+$/.test(version)) {
+    alert("版本号格式应为 X.Y.Z");
+    return;
+  }
+  if (!confirm("即将生成全新密钥并重新打包。旧 Bootloader 将无法验证新固件，确认继续？")) return;
+  try {
+    const r = await fetch("/api/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version })
+    });
+    const data = await r.json();
+    if (!data.ok) alert(data.message || "启动失败");
+  } catch (e) {
+    alert("无法连接服务器，请先运行 python tools/webui.py");
+  }
+}
+
+$("btnRun").onclick = runRotation;
+
+async function loop() {
+  await refresh();
+  const running = $("pill").textContent.includes("运行中");
+  setTimeout(loop, running ? 700 : 3000);
+}
+loop();
+</script>
+</body>
+</html>

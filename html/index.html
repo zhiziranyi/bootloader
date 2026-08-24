@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FlashSafe Pro · 本地上位机</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">FS</span>
+    <div>
+      <h1>FlashSafe Pro · 本地上位机</h1>
+      <p>STM32F407ZGT6 · ECDSA 签名 · A/B OTA · LAN8720</p>
+    </div>
+  </div>
+  <div id="conn-pill" class="pill offline">本地服务：连接中</div>
+</header>
+
+<main>
+  <section class="cards">
+    <div class="card"><div class="label">设备串口</div><div id="serial-state" class="value">未连接</div></div>
+    <div class="card"><div class="label">固件服务器</div><div id="fw-server-state" class="value">未启动</div></div>
+    <div class="card"><div class="label">签名固件包</div><div id="pkg-count" class="value big">—</div></div>
+    <div class="card"><div class="label">最新发布</div><div id="last-run" class="value">—</div></div>
+  </section>
+
+  <section class="panel">
+    <h2>1. 设备串口与 Bootloader CLI</h2>
+    <p class="desc">上位机独占串口。先关闭友善串口助手等其他串口程序，再选择 COM3 并连接。若设备当前在 APP，手动按复位键后，在 Bootloader 的 3 秒窗口点击“发送任意字符进入 CLI”。</p>
+    <div class="row">
+      <label class="field">串口<select id="serial-port"><option value="COM3">COM3</option></select></label>
+      <label class="field">波特率<input id="serial-baud" type="number" value="115200" min="1200" max="2000000"></label>
+      <button id="btn-serial-refresh" class="btn ghost">刷新端口</button>
+      <button id="btn-serial-connect" class="btn primary">连接串口</button>
+      <button id="btn-serial-close" class="btn ghost">断开</button>
+      <button id="btn-enter-cli" class="btn ghost">发送任意字符进入 CLI</button>
+    </div>
+    <div class="command-row">
+      <button class="btn ghost quick-command" data-command="help">help</button>
+      <button class="btn ghost quick-command" data-command="status">status</button>
+      <button class="btn ghost quick-command" data-command="reboot">reboot</button>
+      <input id="serial-command" class="command-input" placeholder="输入 Bootloader CLI 命令，例如：status">
+      <button id="btn-serial-send" class="btn primary">发送</button>
+    </div>
+    <div id="device-console" class="console empty"></div>
+  </section>
+
+  <section class="panel">
+    <h2>2. OTA 升级</h2>
+    <p class="desc">先启动下方的固件服务器；目标槽必须与当前运行槽相反。固件已经由发布工具打包并用设备内置公钥验签。</p>
+    <div class="row">
+      <label class="field wide">固件 URL<input id="ota-url" type="text" spellcheck="false" placeholder="192.168.137.1:8000/firmware_v1.2.3_slotB.pkg"></label>
+      <button id="btn-ota-send" class="btn primary">发送 OTA 命令</button>
+    </div>
+  </section>
+
+  <section class="panel grid-panel">
+    <div>
+      <h2>3. 发布签名固件</h2>
+      <p class="desc">构建 APP-A / APP-B，生成 .pkg、发布清单，并在电脑端复核签名。</p>
+      <div class="row">
+        <label class="field">版本号<input id="version" type="text" value="1.2.3" spellcheck="false"></label>
+        <button id="btn-release" class="btn primary">构建并发布</button>
+      </div>
+    </div>
+    <div>
+      <h2>4. OTA 固件服务器</h2>
+      <p class="desc">服务 <code>firmware\</code> 目录。电脑网卡共享时，设备通常访问 <code>192.168.137.1</code>。</p>
+      <div class="row">
+        <label class="field">端口<input id="fw-server-port" type="number" value="8000" min="1" max="65535"></label>
+        <button id="btn-fw-server" class="btn primary">启动服务器</button>
+        <button id="btn-fw-server-stop" class="btn ghost">停止</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel grid-panel">
+    <div>
+      <h2>5. 串口烧录</h2>
+      <p class="desc">此操作进入 STM32 ROM 串口下载模式。烧录 Bootloader 前：BOOT0 接 3.3V，按复位；完成后把 BOOT0 接回 GND 再复位。不会烧除 APP-A/B 以外的分区，具体取决于所选目标。</p>
+      <div class="row">
+        <label class="field">目标<select id="flash-target"><option value="bootloader">Bootloader</option><option value="app_a">APP-A</option><option value="app_b">APP-B</option></select></label>
+        <button id="btn-flash" class="btn primary">开始串口烧录</button>
+      </div>
+    </div>
+    <div>
+      <h2>6. 密钥轮换</h2>
+      <p class="desc">量产前使用。会生成全新签名密钥、备份旧公钥、重新构建和打包。</p>
+      <div class="row"><button id="btn-rotate" class="btn ghost">轮换密钥并重建</button></div>
+      <div id="key-hash" class="hint mono">当前公钥：—</div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>本机执行日志</h2>
+    <div id="console" class="console empty"></div>
+  </section>
+
+  <section class="panel">
+    <h2>发布文件下载</h2>
+    <div id="files" class="file-list"><div class="file"><div class="meta">正在读取项目发布文件…</div></div></div>
+  </section>
+</main>
+
+<footer>仅监听 <code>127.0.0.1:8765</code> · 串口只能被一个程序占用 · 私钥 <code>tools\keys\private_key.pem</code> 严禁外发</footer>
+<script src="js/main.js"></script>
+</body>
+</html>

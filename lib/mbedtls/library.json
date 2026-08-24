@@ -1,0 +1,28 @@
+{
+  "name": "mbedtls",
+  "version": "2.16.2",
+  "description": "Minimal mbedTLS for ECDSA P-256 verification",
+  "frameworks": ["stm32cube"],
+  "platforms": ["ststm32"],
+  "build": {
+    "srcFilter": [
+      "+<library/ecdsa.c>",
+      "+<library/ecp.c>",
+      "+<library/ecp_curves.c>",
+      "+<library/sha256.c>",
+      "+<library/bignum.c>",
+      "+<library/asn1parse.c>",
+      "+<library/asn1write.c>",
+      "+<library/md.c>",
+      "+<library/pk.c>",
+      "+<library/pk_wrap.c>",
+      "+<library/platform.c>",
+      "+<library/platform_util.c>",
+      "+<library/ecdh.c>",
+      "+<library/entropy.c>",
+      "+<library/ctr_drbg.c>",
+      "-<library/templates/>"
+    ],
+    "includeDir": "include"
+  }
+}

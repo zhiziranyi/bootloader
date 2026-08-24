@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "Bootloader",
+			"path": "."
+		},
+		{
+			"name": "App",
+			"path": "app"
+		}
+	],
+	"settings": {}
+}
