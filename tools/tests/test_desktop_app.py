@@ -34,7 +34,8 @@ class DesktopHostTests(unittest.TestCase):
         source = DESKTOP_APP.read_text(encoding="utf-8")
         for marker in ("_build_guide_tab", "generate_ota_url", '"info"',
                        "硬件在环报告", "export_hil_report", "analyze_hil_log",
-                       "hil-evidence.json", "load_evidence", "clear_saved_hil_evidence"):
+                       "hil-evidence.json", "load_evidence", "import_legacy_reports",
+                       "clear_saved_hil_evidence"):
             self.assertIn(marker, source)
 
     def test_active_slot_is_read_from_boot_logs(self):

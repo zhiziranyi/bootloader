@@ -168,6 +168,56 @@ def record_completed_evidence(store, analysis, recorded_at=None):
     return saved, changed
 
 
+def _legacy_evidence_lines(markdown, check):
+    """Extract the device-log code block below one passed legacy heading."""
+    heading = f"### {check['name']} — 通过"
+    start = markdown.find(heading)
+    if start < 0:
+        return []
+    next_heading = markdown.find("\n### ", start + len(heading))
+    section = markdown[start:next_heading if next_heading >= 0 else len(markdown)]
+    fence_start = section.find("```text")
+    if fence_start < 0:
+        return []
+    content_start = section.find("\n", fence_start)
+    fence_end = section.find("\n```", content_start + 1)
+    if content_start < 0 or fence_end < 0:
+        return []
+    lines = []
+    for raw in section[content_start + 1:fence_end].splitlines():
+        timestamp, message = "", raw.strip()
+        if raw.startswith("[") and "] " in raw:
+            timestamp, message = raw[1:].split("] ", 1)
+        lines.append({"t": timestamp, "m": message})
+    return _normalise_lines(lines)
+
+
+def import_legacy_reports(report_directory, store):
+    """Migrate only fully evidenced passes from old exported Markdown reports."""
+    saved = _normalise_store(store)
+    directory = Path(report_directory)
+    if not directory.is_dir():
+        return saved, False
+    changed = False
+    for report_path in sorted(directory.glob("hil-report-*.md"), reverse=True):
+        try:
+            markdown = report_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for check in CHECKS:
+            check_id = check["id"]
+            if check_id in saved["checks"]:
+                continue
+            candidate = {
+                "recorded_at": f"迁移自 {report_path.name}",
+                "evidence": _legacy_evidence_lines(markdown, check),
+            }
+            if _record_is_complete(check, candidate):
+                saved["checks"][check_id] = candidate
+                changed = True
+    return saved, changed
+
+
 def combine_with_saved_evidence(live_analysis, store):
     """Prefer current-session evidence, otherwise expose verified history."""
     saved = _normalise_store(store)

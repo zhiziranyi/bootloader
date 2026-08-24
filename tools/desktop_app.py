@@ -82,6 +82,11 @@ class FlashSafeDesktopApp:
         self._hil_live_analysis = {}
         self._hil_evidence_path = PROJECT_ROOT / "reports" / "hil-evidence.json"
         self._hil_evidence = hil_report.load_evidence(self._hil_evidence_path)
+        self._hil_evidence, migrated = hil_report.import_legacy_reports(
+            PROJECT_ROOT / "reports", self._hil_evidence
+        )
+        if migrated:
+            hil_report.save_evidence(self._hil_evidence_path, self._hil_evidence)
         self._active_slot = None
         self.hil_summary = tk.StringVar(value="等待设备串口日志；报告只判定真实 MCU 输出。")
         self._build()

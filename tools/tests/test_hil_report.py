@@ -72,6 +72,23 @@ class HilReportTests(unittest.TestCase):
         self.assertFalse(changed)
         self.assertNotIn("trial_power_rollback", saved.get("checks", {}))
 
+    def test_legacy_markdown_report_is_migrated_only_when_its_evidence_is_complete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "hil-report-20260824-120000.md"
+            report.write_text(
+                "### Trial 未确认自动回退 — 通过\n"
+                "```text\n"
+                "[12:00:00] [APP] Trial confirmation delayed for 15000 ms\n"
+                "[12:00:16] [BOOT] Trial was not confirmed; reverting to slot A\n"
+                "```\n",
+                encoding="utf-8",
+            )
+
+            saved, changed = hil_report.import_legacy_reports(Path(tmp), {})
+
+        self.assertTrue(changed)
+        self.assertIn("trial_power_rollback", saved["checks"])
+
 
 if __name__ == "__main__":
     unittest.main()
