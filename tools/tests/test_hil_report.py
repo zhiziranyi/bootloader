@@ -1,6 +1,7 @@
 """Tests for extracting Hardware-in-the-Loop evidence from UART logs."""
 
 from pathlib import Path
+import tempfile
 import sys
 import unittest
 
@@ -37,6 +38,39 @@ class HilReportTests(unittest.TestCase):
         self.assertIn("通过", report)
         self.assertIn("物理断电由测试人员执行", report)
         self.assertIn("[ECDSA] Firmware signature VALID", report)
+
+    def test_persisted_complete_evidence_survives_a_new_desktop_session(self):
+        live = hil_report.analyze_hil_log([
+            {"t": "12:00:00", "m": "[APP] Trial confirmation delayed for 15000 ms"},
+            {"t": "12:00:16", "m": "[BOOT] Trial was not confirmed; reverting to slot A"},
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "hil-evidence.json"
+            saved, changed = hil_report.record_completed_evidence(
+                hil_report.load_evidence(path), live, recorded_at="2026-08-24T12:01:00Z"
+            )
+            self.assertTrue(changed)
+            hil_report.save_evidence(path, saved)
+
+            reloaded = hil_report.load_evidence(path)
+            later = hil_report.combine_with_saved_evidence(
+                hil_report.analyze_hil_log([]), reloaded
+            )
+
+        result = later["trial_power_rollback"]
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["source"], "历史保存证据")
+        self.assertEqual(result["recorded_at"], "2026-08-24T12:01:00Z")
+
+    def test_incomplete_evidence_is_not_saved_as_a_pass(self):
+        partial = hil_report.analyze_hil_log([
+            {"t": "13:00:00", "m": "[APP] Trial confirmation delayed for 15000 ms"},
+        ])
+
+        saved, changed = hil_report.record_completed_evidence({}, partial)
+
+        self.assertFalse(changed)
+        self.assertNotIn("trial_power_rollback", saved.get("checks", {}))
 
 
 if __name__ == "__main__":

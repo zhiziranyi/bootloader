@@ -10,5 +10,6 @@ tools/keys/
 firmware/*.pkg
 firmware/*.bin
 firmware/release-v*.json
+reports/
 __pycache__/
 *.pyc

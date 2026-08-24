@@ -79,6 +79,9 @@ class FlashSafeDesktopApp:
         self._task_log_count = 0
         self._hil_log_count = -1
         self._hil_analysis = {}
+        self._hil_live_analysis = {}
+        self._hil_evidence_path = PROJECT_ROOT / "reports" / "hil-evidence.json"
+        self._hil_evidence = hil_report.load_evidence(self._hil_evidence_path)
         self._active_slot = None
         self.hil_summary = tk.StringVar(value="等待设备串口日志；报告只判定真实 MCU 输出。")
         self._build()
@@ -133,7 +136,7 @@ class FlashSafeDesktopApp:
         ttk.Label(
             overview,
             text="本页只分析本次会话中 MCU 的真实 UART 日志，不模拟 OTA 或掉电。"
-                 "下载、安装、Trial 阶段的断电仍需人工执行。",
+                 "下载、安装、Trial 阶段的断电仍需人工执行。通过项会自动保存，下一次启动可继续测试未完成项。",
             wraplength=1040,
         ).pack(anchor="w")
         ttk.Label(overview, textvariable=self.hil_summary, style="Status.TLabel").pack(
@@ -148,26 +151,46 @@ class FlashSafeDesktopApp:
             side="left", padx=(0, 6)
         )
         ttk.Button(actions, text="打开报告目录", command=lambda: self.open_folder(PROJECT_ROOT / "reports")).pack(
-            side="left"
+            side="left", padx=(0, 6)
         )
-        self.hil_log = self._make_log(parent, "自动判定（本次真实设备证据）", height=24)
+        ttk.Button(actions, text="清除已保存测试记录", command=self.clear_saved_hil_evidence).pack(side="left")
+        self.hil_log = self._make_log(parent, "自动判定（本次与历史真实设备证据）", height=24)
 
     def _update_hil_report(self, serial_logs, force=False):
         if not force and len(serial_logs) == self._hil_log_count:
             return
         self._hil_log_count = len(serial_logs)
-        self._hil_analysis = hil_report.analyze_hil_log(serial_logs)
+        self._hil_live_analysis = hil_report.analyze_hil_log(serial_logs)
+        self._hil_evidence, changed = hil_report.record_completed_evidence(
+            self._hil_evidence, self._hil_live_analysis
+        )
+        if changed:
+            hil_report.save_evidence(self._hil_evidence_path, self._hil_evidence)
+        self._hil_analysis = hil_report.combine_with_saved_evidence(
+            self._hil_live_analysis, self._hil_evidence
+        )
+        self._render_hil_report()
+
+    def _render_hil_report(self):
         passed = sum(1 for result in self._hil_analysis.values() if result["passed"])
         total = len(self._hil_analysis)
+        historical = sum(
+            1 for result in self._hil_analysis.values()
+            if result["passed"] and result.get("source") == "历史保存证据"
+        )
         self.hil_summary.set(
-            f"本次会话已识别 {passed}/{total} 个场景通过；未出现完整设备证据的场景保持“待验证”。"
+            f"已完成 {passed}/{total}；其中历史保存 {historical} 项。"
+            "未出现完整设备证据的场景保持“待验证”。"
         )
         lines = []
         for check in hil_report.CHECKS:
             result = self._hil_analysis[check["id"]]
             state = "通过" if result["passed"] else "待验证"
             manual = "（需人工断电）" if result["manual"] else ""
-            lines.append(f"[{state}] {result['name']}{manual}")
+            source = result.get("source", "待验证")
+            recorded_at = result.get("recorded_at", "")
+            suffix = f"；保存时间 {recorded_at}" if recorded_at else ""
+            lines.append(f"[{state}] {result['name']}{manual} — {source}{suffix}")
             if result["evidence"]:
                 for evidence in result["evidence"]:
                     prefix = f"[{evidence['t']}] " if evidence["t"] else ""
@@ -208,6 +231,22 @@ class FlashSafeDesktopApp:
             encoding="utf-8",
         )
         messagebox.showinfo(APP_TITLE, f"HIL Markdown 报告已导出：\n{report_path}")
+
+    def clear_saved_hil_evidence(self):
+        if not messagebox.askyesno(
+            APP_TITLE,
+            "确定清除已保存的 HIL 测试记录吗？当前窗口已采集的串口日志仍会显示；重启上位机后将从空白记录开始。",
+        ):
+            return
+        try:
+            self._hil_evidence_path.unlink(missing_ok=True)
+            self._hil_evidence = hil_report.load_evidence(self._hil_evidence_path)
+            self._hil_analysis = hil_report.combine_with_saved_evidence(
+                self._hil_live_analysis, self._hil_evidence
+            )
+            self._render_hil_report()
+        except OSError as exc:
+            messagebox.showerror(APP_TITLE, f"无法清除 HIL 记录：{exc}")
 
     def _build_device_tab(self, parent):
         serial_frame = self._section(parent, "1. 设备串口与 CLI")

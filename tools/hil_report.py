@@ -8,6 +8,8 @@ real hardware session and renders their evidence into a portable Markdown file.
 from __future__ import annotations
 
 import datetime as dt
+import json
+from pathlib import Path
 
 
 CHECKS = (
@@ -55,6 +57,8 @@ CHECKS = (
     },
 )
 
+EVIDENCE_SCHEMA_VERSION = 1
+
 
 def _normalise_lines(lines):
     normalised = []
@@ -93,6 +97,112 @@ def analyze_hil_log(lines):
     return results
 
 
+def _empty_evidence_store():
+    return {"schema_version": EVIDENCE_SCHEMA_VERSION, "checks": {}}
+
+
+def _record_is_complete(check, record):
+    if not isinstance(record, dict) or not isinstance(record.get("evidence"), list):
+        return False
+    messages = [str(entry.get("m", "")) for entry in record["evidence"]
+                if isinstance(entry, dict)]
+    return all(any(token in message for message in messages) for token in check["required"])
+
+
+def _normalise_store(store):
+    normalised = _empty_evidence_store()
+    if not isinstance(store, dict) or not isinstance(store.get("checks"), dict):
+        return normalised
+    records = store["checks"]
+    for check in CHECKS:
+        record = records.get(check["id"])
+        if _record_is_complete(check, record):
+            normalised["checks"][check["id"]] = {
+                "recorded_at": str(record.get("recorded_at", "")),
+                "evidence": _normalise_lines(record["evidence"]),
+            }
+    return normalised
+
+
+def load_evidence(path):
+    """Load only complete, structurally valid evidence records from disk."""
+    path = Path(path)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return _empty_evidence_store()
+    return _normalise_store(raw)
+
+
+def save_evidence(path, store):
+    """Atomically save the evidence ledger so a host crash cannot corrupt it."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    normalised = _normalise_store(store)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(normalised, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    temporary.replace(path)
+
+
+def record_completed_evidence(store, analysis, recorded_at=None):
+    """Add complete scenarios to an append-safe evidence ledger.
+
+    A previously stored passing record remains untouched.  This avoids turning
+    a later partial or unrelated session into a new claimed result.
+    """
+    saved = _normalise_store(store)
+    changed = False
+    timestamp = recorded_at or dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+    for check in CHECKS:
+        check_id = check["id"]
+        result = analysis.get(check_id, {}) if isinstance(analysis, dict) else {}
+        if not result.get("passed") or check_id in saved["checks"]:
+            continue
+        evidence = _normalise_lines(result.get("evidence", []))
+        candidate = {"recorded_at": timestamp, "evidence": evidence}
+        if _record_is_complete(check, candidate):
+            saved["checks"][check_id] = candidate
+            changed = True
+    return saved, changed
+
+
+def combine_with_saved_evidence(live_analysis, store):
+    """Prefer current-session evidence, otherwise expose verified history."""
+    saved = _normalise_store(store)
+    combined = {}
+    for check in CHECKS:
+        check_id = check["id"]
+        live = dict((live_analysis or {}).get(check_id, {}))
+        if live.get("passed"):
+            live["source"] = "本次会话"
+            live["recorded_at"] = ""
+            combined[check_id] = live
+            continue
+        historical = saved["checks"].get(check_id)
+        if historical and _record_is_complete(check, historical):
+            combined[check_id] = {
+                "name": check["name"],
+                "manual": check["manual"],
+                "passed": True,
+                "required": check["required"],
+                "evidence": historical["evidence"],
+                "source": "历史保存证据",
+                "recorded_at": historical["recorded_at"],
+            }
+            continue
+        live.setdefault("name", check["name"])
+        live.setdefault("manual", check["manual"])
+        live.setdefault("passed", False)
+        live.setdefault("required", check["required"])
+        live.setdefault("evidence", [])
+        live["source"] = "待验证"
+        live["recorded_at"] = ""
+        combined[check_id] = live
+    return combined
+
+
 def render_hil_markdown(analysis, metadata=None):
     """Render a concise, reviewable report without claiming unobserved tests."""
     metadata = metadata or {}
@@ -104,11 +214,11 @@ def render_hil_markdown(analysis, metadata=None):
         f"- 开发板：{metadata.get('board', 'STM32F407ZGT6')}",
         f"- 串口：{metadata.get('serial', '未提供')}",
         f"- 活动槽：{metadata.get('active_slot', '未从本次日志识别')}",
-        "- 证据来源：上位机本次会话捕获的 MCU UART 日志。",
+        "- 证据来源：上位机本次会话或已保存的 MCU UART 证据台账。",
         "- 说明：物理断电由测试人员执行；报告仅根据设备实际输出判定，不模拟掉电。",
         "",
-        "| 场景 | 结果 | 证据 |",
-        "| --- | --- | --- |",
+        "| 场景 | 结果 | 来源 | 证据 |",
+        "| --- | --- | --- | --- |",
     ]
     for check in CHECKS:
         result = analysis.get(check["id"], {})
@@ -117,12 +227,14 @@ def render_hil_markdown(analysis, metadata=None):
         brief = "<br>".join(
             f"`{entry.get('t', '')} {entry.get('m', '')}`" for entry in evidence
         ) or "未发现所需设备日志"
-        lines.append(f"| {check['name']} | {status} | {brief} |")
+        source = result.get("source", "本次会话" if result.get("passed") else "待验证")
+        lines.append(f"| {check['name']} | {status} | {source} | {brief} |")
 
     lines.extend(["", "## 详细证据", ""])
     for check in CHECKS:
         result = analysis.get(check["id"], {})
-        lines.append(f"### {check['name']} — {'通过' if result.get('passed') else '待验证'}")
+        source = result.get("source", "本次会话" if result.get("passed") else "待验证")
+        lines.append(f"### {check['name']} — {'通过' if result.get('passed') else '待验证'}（{source}）")
         if result.get("evidence"):
             lines.append("```text")
             for entry in result["evidence"]:
