@@ -5,6 +5,7 @@ It does not open a browser or a web server. The application reuses the
 validated local serial and project-operation layer from ``webui.py``.
 """
 
+import datetime as dt
 import os
 import re
 import shutil
@@ -46,6 +47,7 @@ if str(TOOLS_DIR) not in sys.path:
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 
+import hil_report
 import webui
 
 
@@ -75,7 +77,10 @@ class FlashSafeDesktopApp:
         self.release_state = tk.StringVar(value="发布：空闲")
         self._device_log_count = 0
         self._task_log_count = 0
+        self._hil_log_count = -1
+        self._hil_analysis = {}
         self._active_slot = None
+        self.hil_summary = tk.StringVar(value="等待设备串口日志；报告只判定真实 MCU 输出。")
         self._build()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh()
@@ -106,19 +111,103 @@ class FlashSafeDesktopApp:
         release_tab = ttk.Frame(notebook, padding=10)
         log_tab = ttk.Frame(notebook, padding=10)
         guide_tab = ttk.Frame(notebook, padding=10)
+        hil_tab = ttk.Frame(notebook, padding=10)
         notebook.add(device_tab, text="设备与 OTA")
         notebook.add(release_tab, text="发布、服务器与烧录")
         notebook.add(log_tab, text="本机任务日志")
         notebook.add(guide_tab, text="操作流程与记录")
+        notebook.add(hil_tab, text="硬件在环报告")
         self._build_device_tab(device_tab)
         self._build_release_tab(release_tab)
         self.task_log = self._make_log(log_tab, "本机任务日志")
         self._build_guide_tab(guide_tab)
+        self._build_hil_tab(hil_tab)
 
     def _section(self, parent, title):
         frame = ttk.LabelFrame(parent, text=title, padding=10)
         frame.pack(fill="x", pady=(0, 10))
         return frame
+
+    def _build_hil_tab(self, parent):
+        overview = self._section(parent, "HIL 硬件在环验证与证据导出")
+        ttk.Label(
+            overview,
+            text="本页只分析本次会话中 MCU 的真实 UART 日志，不模拟 OTA 或掉电。"
+                 "下载、安装、Trial 阶段的断电仍需人工执行。",
+            wraplength=1040,
+        ).pack(anchor="w")
+        ttk.Label(overview, textvariable=self.hil_summary, style="Status.TLabel").pack(
+            anchor="w", pady=(8, 4)
+        )
+        actions = ttk.Frame(overview)
+        actions.pack(fill="x")
+        ttk.Button(actions, text="分析当前串口日志", command=self.analyze_hil_report).pack(
+            side="left", padx=(0, 6)
+        )
+        ttk.Button(actions, text="导出 Markdown 报告", command=self.export_hil_report).pack(
+            side="left", padx=(0, 6)
+        )
+        ttk.Button(actions, text="打开报告目录", command=lambda: self.open_folder(PROJECT_ROOT / "reports")).pack(
+            side="left"
+        )
+        self.hil_log = self._make_log(parent, "自动判定（本次真实设备证据）", height=24)
+
+    def _update_hil_report(self, serial_logs, force=False):
+        if not force and len(serial_logs) == self._hil_log_count:
+            return
+        self._hil_log_count = len(serial_logs)
+        self._hil_analysis = hil_report.analyze_hil_log(serial_logs)
+        passed = sum(1 for result in self._hil_analysis.values() if result["passed"])
+        total = len(self._hil_analysis)
+        self.hil_summary.set(
+            f"本次会话已识别 {passed}/{total} 个场景通过；未出现完整设备证据的场景保持“待验证”。"
+        )
+        lines = []
+        for check in hil_report.CHECKS:
+            result = self._hil_analysis[check["id"]]
+            state = "通过" if result["passed"] else "待验证"
+            manual = "（需人工断电）" if result["manual"] else ""
+            lines.append(f"[{state}] {result['name']}{manual}")
+            if result["evidence"]:
+                for evidence in result["evidence"]:
+                    prefix = f"[{evidence['t']}] " if evidence["t"] else ""
+                    lines.append(f"  {prefix}{evidence['m']}")
+            else:
+                lines.append("  未采集到完整设备日志")
+            lines.append("")
+        self.hil_log.configure(state="normal")
+        self.hil_log.delete("1.0", "end")
+        self.hil_log.insert("1.0", "\n".join(lines))
+        self.hil_log.configure(state="disabled")
+
+    def analyze_hil_report(self):
+        status = webui.status_json()
+        logs = status["serial"]["logs"]
+        self._update_hil_report(logs, force=True)
+        passed = sum(1 for result in self._hil_analysis.values() if result["passed"])
+        messagebox.showinfo(APP_TITLE, f"已完成日志分析：{passed}/{len(self._hil_analysis)} 个 HIL 场景通过。")
+
+    def export_hil_report(self):
+        status = webui.status_json()
+        serial = status["serial"]
+        logs = serial["logs"]
+        self._update_hil_report(logs, force=True)
+        report_dir = PROJECT_ROOT / "reports"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        report_path = report_dir / f"hil-report-{timestamp}.md"
+        report_path.write_text(
+            hil_report.render_hil_markdown(
+                self._hil_analysis,
+                {
+                    "board": "STM32F407ZGT6",
+                    "serial": f"{serial['port']} @ {serial['baud']}" if serial["connected"] else "未连接",
+                    "active_slot": active_slot_from_logs(logs) or "未识别",
+                },
+            ),
+            encoding="utf-8",
+        )
+        messagebox.showinfo(APP_TITLE, f"HIL Markdown 报告已导出：\n{report_path}")
 
     def _build_device_tab(self, parent):
         serial_frame = self._section(parent, "1. 设备串口与 CLI")
@@ -424,6 +513,7 @@ Factory 制备与恢复：
             self.update_factory_recommendation(status)
             self._device_log_count = self._append_logs(self.device_log, serial_status["logs"], self._device_log_count)
             self._task_log_count = self._append_logs(self.task_log, status["logs"], self._task_log_count)
+            self._update_hil_report(serial_status["logs"])
         except Exception as exc:
             self.release_state.set(f"状态读取失败：{exc}")
         self.root.after(600, self.refresh)

@@ -60,6 +60,7 @@ _log_lines = []
 _serial_log_lock = threading.Lock()
 _serial_lines = []
 _serial_lock = threading.Lock()
+_serial_write_lock = threading.Lock()
 _serial = None
 _serial_port = None
 _serial_baud = None
@@ -126,6 +127,17 @@ def validate_tcp_port(port):
     if not 1 <= port <= 65535:
         raise ValueError("TCP port must be between 1 and 65535")
     return port
+
+
+def validate_trial_confirm_delay(delay_ms):
+    """Accept normal releases (0) or a usable physical power-cut window."""
+    try:
+        delay_ms = int(delay_ms)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("trial confirmation delay must be an integer") from exc
+    if delay_ms != 0 and not 5_000 <= delay_ms <= 60_000:
+        raise ValueError("trial confirmation delay must be 0 or between 5000 and 60000 ms")
+    return delay_ms
 
 
 def tool_python_executable():
@@ -319,6 +331,27 @@ def close_serial():
     return serial_status()
 
 
+SERIAL_COMMAND_INTERBYTE_DELAY_S = 0.003
+
+
+def write_serial_command(device, text, append_newline=True):
+    """Transmit a command slowly enough for the one-byte STM32 IRQ receiver.
+
+    The target uses interrupt-driven, one-byte UART reception during its early
+    boot CLI window.  USB-to-TTL adapters may otherwise deliver an entire long
+    command in one burst around a reset.  The small 3 ms gap costs less than
+    200 ms for a URL, but gives every character an unambiguous receive slot.
+    """
+    payload = text.rstrip("\r\n") + "\r" if append_newline else text
+    encoded = payload.encode("utf-8")
+    for index, byte in enumerate(encoded):
+        device.write(bytes((byte,)))
+        if index + 1 < len(encoded):
+            time.sleep(SERIAL_COMMAND_INTERBYTE_DELAY_S)
+    device.flush()
+    return len(encoded)
+
+
 def send_serial(text, append_newline=True):
     if not isinstance(text, str) or not text.strip():
         raise ValueError("command text is required")
@@ -330,11 +363,11 @@ def send_serial(text, append_newline=True):
     if device is None or not device.is_open:
         raise RuntimeError("serial port is not connected")
     try:
-        device.write(payload.encode("utf-8"))
-        device.flush()
+        with _serial_write_lock:
+            count = write_serial_command(device, payload, append_newline=False)
     except Exception as exc:
         raise RuntimeError(f"serial write failed: {exc}") from exc
-    serial_log(f"> {text.rstrip()}")
+    serial_log(f"> {text.rstrip()}  [paced {count} bytes]")
 
 
 def platformio_executable():
@@ -351,12 +384,7 @@ def start_rotate(version):
 
 
 def start_release(version, trial_confirm_delay_ms=0):
-    try:
-        trial_confirm_delay_ms = int(trial_confirm_delay_ms)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("trial confirmation delay must be an integer") from exc
-    if not 0 <= trial_confirm_delay_ms <= 60_000:
-        raise ValueError("trial confirmation delay must be between 0 and 60000 ms")
+    trial_confirm_delay_ms = validate_trial_confirm_delay(trial_confirm_delay_ms)
     command = [tool_python_executable(), str(TOOLS_DIR / "release_firmware.py"),
                "--version", validate_version(version)]
     if trial_confirm_delay_ms:

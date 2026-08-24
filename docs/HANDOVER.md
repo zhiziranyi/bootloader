@@ -30,6 +30,8 @@
 | 回滚 | 从 Slot B 回滚到 Slot A 成功，`Rollbacks: 1`。 |
 | 密钥轮换 | 新 Bootloader 公钥 SHA-256 已变更为 `02207B7869DD7F3CCE7F5224036F4BD3EC22C178825D7149C90C71DF57E3B9C5`。 |
 | 轮换后 OTA | 新密钥签名的 v2.0.0 成功安装到 Slot B、Trial 启动并确认。 |
+| Trial 未确认掉电回退 | v2.0.12 在延迟确认窗口断电，下一次启动显示 `Trial was not confirmed; reverting to slot A`。 |
+| Factory 制备/恢复 | 已验签的 v2.0.15 写入 W25Q64 Factory 区；`factory` 已验签并恢复至 Slot A。 |
 | 上位机 | 原生 Tkinter 上位机支持串口 CLI、发布、HTTP 服务、串口烧录、密钥轮换、自动 OTA URL 和操作记录。 |
 
 最终已确认状态：`ACTIVE=B`、`FW=2.0.0`、`Upgrade State=8 (DONE)`、`Rollbacks=1`。
@@ -53,20 +55,26 @@
 - “轮换密钥并重建”会自动备份旧私钥和旧公钥至 `tools/keys/backups/`，生成新密钥、重建 Bootloader，并生成新的 A/B 签名包。
 - 轮换后必须用串口重新烧录 Bootloader；旧 Bootloader 不信任新私钥签出的包，新 Bootloader 也会拒绝旧私钥签出的包。
 
-## 5. 待执行的实板测试
+## 5. 硬件在环证据报告
+
+上位机“硬件在环报告”页只读取本次 UART 会话中的真实 MCU 输出，并可导出 `reports/hil-report-*.md`。它把以下场景明确分为“通过”或“待验证”：安全 OTA 验签、Trial 确认、下载阶段恢复、安装阶段恢复、Trial 未确认回退、Factory 制备和 Factory 恢复。
+
+下载、安装和 Trial 三类掉电均由测试人员实际操作；未出现恢复日志时报告不会声称通过。这份 Markdown 可作为答辩、简历项目或后续回归测试的硬件证据附件。
+
+## 6. 待执行的实板测试
 
 1. **断电注入测试**：已新增下载续传、安装保持点和 Trial 延迟确认的完整操作支持；按 [POWER_FAIL_AND_FACTORY_VALIDATION.md](POWER_FAIL_AND_FACTORY_VALIDATION.md) 分别在下载 33%/67%、内部 Flash 安装和 Trial 未确认阶段执行真实断电，并保存恢复日志。
 2. **负向安全测试**：故意篡改 `.pkg`、使用旧密钥签名、发送低版本包，验证 CRC、签名和 anti-rollback 拒绝路径。
-3. **Factory restore**：已新增 `factory net <url>` 制备工具，将已验签的 Slot-A 包写到 W25Q64 `0x200000` Factory 区；仍需要执行一次真实 `factory` 恢复验证并保存日志。
+3. **完整断电覆盖**：Trial 未确认回退已通过；下载阶段与内部 Flash 安装阶段仍需要在实际保持点执行断电并保存恢复日志。
 
-## 6. 推荐后续优化（按含金量排序）
+## 7. 推荐后续优化（按含金量排序）
 
 1. **可重复的断电故障注入**：用继电器或可控电源，在下载、安装、Trial 的状态机节点自动断电，输出恢复测试报告。这能直接体现嵌入式可靠性工程能力。
 2. **每槽版本元数据**：当前 `info`/OLED 的 `FW` 是最近已验证版本；手动回滚后可能仍显示较新的版本。记录 `slot_a_version` / `slot_b_version` 后可准确展示每个槽实际镜像版本。
 3. **CI 与发布治理**：GitHub Actions 运行 Host 单元测试、构建固件、产生 SHA-256 清单；私钥只通过 GitHub Secret 注入签名任务，绝不进入仓库。
 4. **安全升级策略强化**：增加签名的单调构建号、密钥版本号和撤销策略，抵御合法旧包重放；HTTP 已由 ECDSA 保证真实性，但 TLS 可提升传输保密性与抗流量分析能力。
 
-## 7. 仓库卫生与构建
+## 8. 仓库卫生与构建
 
 提交源码、文档、公开公钥和测试；不提交私钥、`.pkg/.bin`、PlatformIO/pyinstaller 构建目录或桌面 EXE。发布包可通过 GitHub Releases 或受控固件服务器分发。
 
