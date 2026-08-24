@@ -63,8 +63,11 @@ class FlashSafeDesktopApp:
         self.ota_url = tk.StringVar(value="")
         self.ota_host = tk.StringVar(value="192.168.137.1")
         self.ota_package = tk.StringVar(value="")
+        self.factory_package = tk.StringVar(value="")
+        self.factory_url = tk.StringVar(value="")
         self.ota_hint = tk.StringVar(value="等待 Bootloader 启动日志，以自动识别 ACTIVE 槽。")
         self.release_version = tk.StringVar(value=self._latest_version())
+        self.trial_test_delay = tk.StringVar(value="15000")
         self.fw_port = tk.StringVar(value="8000")
         self.flash_target = tk.StringVar(value="bootloader")
         self.serial_state = tk.StringVar(value="串口：未连接")
@@ -164,21 +167,42 @@ class FlashSafeDesktopApp:
         ttk.Button(release_frame, text="轮换密钥并重建", command=self.rotate_keys).grid(row=0, column=3, padx=3)
         ttk.Label(release_frame, text="发布会构建、签名、验签并写入 firmware\\release-vX.Y.Z.json。密钥轮换仅用于量产准备。 ").grid(row=1, column=0, columnspan=4, sticky="w", pady=(8, 0))
 
-        server_frame = self._section(parent, "4. 固件服务器")
+        power_frame = self._section(parent, "4. 掉电恢复验证包")
+        ttk.Label(power_frame, text="测试版本号").grid(row=0, column=0, sticky="w")
+        ttk.Entry(power_frame, textvariable=self.release_version, width=16).grid(row=0, column=1, padx=8)
+        ttk.Label(power_frame, text="Trial 延迟(ms)").grid(row=0, column=2, sticky="w")
+        ttk.Entry(power_frame, textvariable=self.trial_test_delay, width=10).grid(row=0, column=3, padx=8)
+        ttk.Button(power_frame, text="构建 Trial 未确认断电包", command=self.release_trial_power_test).grid(row=0, column=4, padx=3)
+        ttk.Button(power_frame, text="安装阶段断电保持", command=self.start_install_power_cut_test).grid(row=0, column=5, padx=3)
+        ttk.Label(power_frame, text="trial power-cut 包会在启动后延迟确认；安装保持仅在已验签、未 reboot 的 CLI 中使用，SWAPPING 写入后保留 15 秒供人为断电。 ").grid(row=1, column=0, columnspan=6, sticky="w", pady=(8, 0))
+
+        server_frame = self._section(parent, "5. 固件服务器")
         ttk.Label(server_frame, text="端口").grid(row=0, column=0)
         ttk.Entry(server_frame, textvariable=self.fw_port, width=10).grid(row=0, column=1, padx=8)
         ttk.Button(server_frame, text="启动服务器", command=self.start_server).grid(row=0, column=2, padx=3)
         ttk.Button(server_frame, text="停止", command=self.stop_server).grid(row=0, column=3, padx=3)
         ttk.Label(server_frame, text="Windows 网络共享时，LAN8720 通常访问 192.168.137.1:8000。 ").grid(row=1, column=0, columnspan=4, sticky="w", pady=(8, 0))
 
-        flash_frame = self._section(parent, "5. 串口烧录")
+        flash_frame = self._section(parent, "6. 串口烧录")
         ttk.Label(flash_frame, text="目标").grid(row=0, column=0)
         ttk.Combobox(flash_frame, textvariable=self.flash_target, state="readonly", width=18,
                      values=("bootloader", "app_a", "app_b")).grid(row=0, column=1, padx=8)
         ttk.Button(flash_frame, text="开始串口烧录", command=self.flash).grid(row=0, column=2, padx=3)
         ttk.Label(flash_frame, text="Bootloader 烧录：BOOT0 拉高并复位；完成后 BOOT0 拉低再复位。上位机不会自动改变硬件接线。 ").grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
-        files_frame = self._section(parent, "6. 本地发布文件与密钥")
+        factory_frame = self._section(parent, "7. Factory 镜像")
+        ttk.Label(factory_frame, text="Factory 包（仅 Slot A）").grid(row=0, column=0, sticky="w")
+        self.factory_package_box = ttk.Combobox(factory_frame, textvariable=self.factory_package,
+                                                width=37, state="readonly")
+        self.factory_package_box.grid(row=0, column=1, columnspan=2, sticky="ew", padx=(8, 4))
+        self.factory_package_box.bind("<<ComboboxSelected>>", lambda _event: self.generate_factory_url())
+        ttk.Button(factory_frame, text="生成 Factory URL", command=self.generate_factory_url).grid(row=0, column=3, padx=3)
+        ttk.Entry(factory_frame, textvariable=self.factory_url).grid(row=1, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        ttk.Button(factory_frame, text="发送 factory net", command=self.send_factory).grid(row=1, column=3, padx=3, pady=(8, 0))
+        factory_frame.columnconfigure(2, weight=1)
+        ttk.Label(factory_frame, text="Factory 镜像写入 W25Q64 的独立 0x200000 区，下载后会做 ECDSA 验签；只有签名且目标为 A 槽的包可恢复。 ").grid(row=2, column=0, columnspan=4, sticky="w", pady=(8, 0))
+
+        files_frame = self._section(parent, "8. 本地发布文件与密钥")
         ttk.Button(files_frame, text="打开固件目录", command=lambda: self.open_folder(PROJECT_ROOT / "firmware")).grid(row=0, column=0, padx=(0, 6))
         ttk.Button(files_frame, text="打开密钥目录", command=lambda: self.open_folder(TOOLS_DIR / "keys")).grid(row=0, column=1, padx=6)
         ttk.Label(files_frame, text="固件包、release 清单、公钥和私钥均保存在项目内；私钥不得外发。 ").grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
@@ -199,6 +223,15 @@ class FlashSafeDesktopApp:
 7. 点击“发送 upgrade net”，等待下载、CRC、ECDSA 验签均通过。
 8. 点击 reboot。设备会安装到非活动槽、试运行并由新 APP 自动确认。
 9. 再次进入 CLI 点击 info/status，确认 ACTIVE 已切换、版本正确、状态为 DONE。
+
+掉电恢复验证（必须保持固件服务器运行）：
+10. 下载阶段：发起 OTA，看到 [DL] 33% 或 67% 后断电；重新上电后应出现 [UPGRADE] Resuming download，并完成验签、安装和 Trial。
+11. 安装阶段：OTA 显示“Firmware verified”后不要 reboot，点击“安装阶段断电保持”；看到 [TEST] INSTALL HOLD 后在 15 秒内断电。重启应从持久化 SWAPPING 状态重新安装。
+12. Trial 未确认阶段：用“构建 Trial 未确认断电包”生成测试包，OTA 并 reboot；看到 [APP] Trial confirmation delayed 后立即断电。下一次启动应显示 Trial was not confirmed 并回到旧槽。
+
+Factory 制备与恢复：
+13. 选择一个已发布的 Slot-A 包，在 Factory 镜像区点击“发送 factory net”，等待 [FACTORY] Image ready。
+14. 进入 CLI 后执行 factory；设备会验签外置 Factory 区、恢复到 A 槽并复位。Factory 包与普通 OTA 缓存位于 W25Q64 的不同区域。
 
 提示：不要烧录 Bootloader 作为日常升级方式；日常演示使用“发布 -> OTA -> reboot”。
 """)
@@ -247,6 +280,23 @@ class FlashSafeDesktopApp:
         self.ota_hint.set(
             f"已识别 ACTIVE={active_slot}；已列出目标槽 {target_slot} 的发布包。请选择后点击“发送 upgrade net”。"
         )
+
+    def update_factory_recommendation(self, status):
+        packages = self._available_ota_packages(status, "A")
+        self.factory_package_box["values"] = packages
+        current = self.factory_package.get()
+        if packages and current not in packages:
+            self.factory_package.set(packages[0])
+            self.generate_factory_url()
+        elif not packages:
+            self.factory_package.set("")
+
+    def generate_factory_url(self):
+        host = self.ota_host.get().strip().replace("http://", "").replace("https://", "").rstrip("/")
+        package = self.factory_package.get().strip()
+        port = self.fw_port.get().strip() or "8000"
+        if host and package:
+            self.factory_url.set(f"{host}:{port}/{package}")
 
     def generate_ota_url(self):
         host = self.ota_host.get().strip().replace("http://", "").replace("https://", "").rstrip("/")
@@ -322,8 +372,25 @@ class FlashSafeDesktopApp:
         if messagebox.askyesno(APP_TITLE, "确认该包的目标槽与当前 ACTIVE 槽相反？"):
             self._operation(lambda: webui.send_serial(f"upgrade net {url}"))
 
+    def send_factory(self):
+        url = self.factory_url.get().strip().replace("http://", "").replace("https://", "")
+        package = self.factory_package.get().strip().lower()
+        if not url or "/" not in url or "_slota.pkg" not in package:
+            messagebox.showwarning(APP_TITLE, "请选择已发布的 Slot-A 包作为 Factory 镜像。")
+            return
+        if messagebox.askyesno(APP_TITLE, "确认写入 Factory 镜像？写入中断不会影响当前 A/B 应用，但未完成的 Factory 镜像不可用于恢复。"):
+            self._operation(lambda: webui.send_serial(f"factory net {url}"))
+
     def release(self):
         self._operation(lambda: webui.start_release(self.release_version.get()))
+
+    def release_trial_power_test(self):
+        if messagebox.askyesno(APP_TITLE, "这会构建一个启动后延迟确认 Trial 的测试包，仅用于人为断电验证。确认继续？"):
+            self._operation(lambda: webui.start_release(self.release_version.get(), self.trial_test_delay.get()))
+
+    def start_install_power_cut_test(self):
+        if messagebox.askyesno(APP_TITLE, "仅在 OTA 已显示验签成功、尚未 reboot 时执行。设备会持久化 SWAPPING 并保持 15 秒，期间可人为断电。确认开始？"):
+            self.send_command("test power install")
 
     def rotate_keys(self):
         if messagebox.askyesno(APP_TITLE, "轮换密钥会使旧签名包失效。确认重新构建全部固件？"):
@@ -354,6 +421,7 @@ class FlashSafeDesktopApp:
             self.release_state.set("发布：" + ("构建中" if runner["running"] else "空闲"))
             self.refresh_ports()
             self.update_ota_recommendation(status)
+            self.update_factory_recommendation(status)
             self._device_log_count = self._append_logs(self.device_log, serial_status["logs"], self._device_log_count)
             self._task_log_count = self._append_logs(self.task_log, status["logs"], self._task_log_count)
         except Exception as exc:

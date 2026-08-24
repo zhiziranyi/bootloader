@@ -44,6 +44,9 @@ static struct {
     uint8_t retry_count;
     uint8_t chunk_buf[DL_CHUNK_SIZE];
     uint32_t last_persist;
+    uint32_t flash_base;
+    uint32_t flash_size;
+    bool persist_upgrade_state;
 } s_dl;
 
 void download_init(void)
@@ -88,7 +91,7 @@ static void download_report_header_crc(const char *source,
 /* Callback for streaming download - writes to external flash */
 static int download_write_chunk(const uint8_t *data, uint32_t len)
 {
-    uint32_t ext_addr = EXT_DOWNLOAD_BASE + s_dl.downloaded;
+    uint32_t ext_addr = s_dl.flash_base + s_dl.downloaded;
 
     if (s_dl.downloaded == 0U) {
         download_report_header_crc("RX", data, len);
@@ -102,7 +105,7 @@ static int download_write_chunk(const uint8_t *data, uint32_t len)
 
     if (s_dl.downloaded == 0U) {
         uint8_t header[sizeof(fw_header_t)];
-        W25Q64_Read(EXT_DOWNLOAD_BASE, header, sizeof(header));
+        W25Q64_Read(s_dl.flash_base, header, sizeof(header));
         download_report_header_crc("FLASH", header, sizeof(header));
     }
 
@@ -116,13 +119,13 @@ static int download_write_chunk(const uint8_t *data, uint32_t len)
  * Erase the download area before writing. W25Q64 requires erased
  * sectors before programming - without this the write produces garbage.
  */
-static bool download_erase_area(uint32_t size)
+static bool download_erase_area(uint32_t flash_base, uint32_t size)
 {
     uint32_t blocks = (size + (64 * 1024) - 1) / (64 * 1024);
     printf("[DL] Erasing %lu x 64KB blocks for %lu bytes...\r\n",
            (unsigned long)blocks, (unsigned long)size);
     for (uint32_t i = 0; i < blocks; i++) {
-        if (W25Q64_EraseBlock64K(EXT_DOWNLOAD_BASE + i * (64 * 1024)) != HAL_OK) {
+        if (W25Q64_EraseBlock64K(flash_base + i * (64 * 1024)) != HAL_OK) {
             printf("[DL] Flash erase failed at block %lu\r\n", (unsigned long)i);
             return false;
         }
@@ -130,13 +133,15 @@ static bool download_erase_area(uint32_t size)
     return true;
 }
 
-int download_start(const char *url, uint16_t port, uint32_t expected_size)
+int download_start_to(const char *url, uint16_t port, uint32_t expected_size,
+                      uint32_t flash_base, uint32_t flash_size,
+                      bool persist_upgrade_state)
 {
     if (s_dl.state == DL_STATE_DOWNLOADING) {
         printf("[DL] Already downloading\r\n");
         return -1;
     }
-    if (expected_size == 0 || expected_size > EXT_DOWNLOAD_SIZE) {
+    if (expected_size == 0 || expected_size > flash_size) {
         printf("[DL] Invalid expected size: %lu\r\n",
                (unsigned long)expected_size);
         return -1;
@@ -155,21 +160,34 @@ int download_start(const char *url, uint16_t port, uint32_t expected_size)
     s_dl.crc = CRC32_INIT_VALUE;
     s_dl.retry_count = 0;
     s_dl.state = DL_STATE_DOWNLOADING;
+    s_dl.flash_base = flash_base;
+    s_dl.flash_size = flash_size;
+    s_dl.persist_upgrade_state = persist_upgrade_state;
 
-    /* Persist URL + state for power-loss resume */
-    config_set_upgrade_url(s_dl.url);
-    config_update_state(UPGRADE_DOWNLOADING);
-    config_update_download_progress(0, expected_size);
+    if (s_dl.persist_upgrade_state) {
+        /* Persist URL + state for power-loss resume. */
+        config_set_upgrade_url(s_dl.url);
+        config_update_state(UPGRADE_DOWNLOADING);
+        config_update_download_progress(0, expected_size);
+    }
 
-    if (!download_erase_area(expected_size)) {
+    if (!download_erase_area(s_dl.flash_base, expected_size)) {
         s_dl.state = DL_STATE_ERROR;
-        config_update_state(UPGRADE_FAILED);
+        if (s_dl.persist_upgrade_state) {
+            config_update_state(UPGRADE_FAILED);
+        }
         return -1;
     }
 
     printf("[DL] Starting download: %s (%lu bytes)\r\n",
            s_dl.url, (unsigned long)expected_size);
     return 0;
+}
+
+int download_start(const char *url, uint16_t port, uint32_t expected_size)
+{
+    return download_start_to(url, port, expected_size,
+                             EXT_DOWNLOAD_BASE, EXT_DOWNLOAD_SIZE, true);
 }
 
 void download_process(void)
@@ -187,8 +205,10 @@ void download_process(void)
 
     if (start >= s_dl.total_size) {
         s_dl.state = DL_STATE_COMPLETE;
-        config_update_download_progress(s_dl.downloaded, s_dl.total_size);
-        config_update_state(UPGRADE_DOWNLOADED);
+        if (s_dl.persist_upgrade_state) {
+            config_update_download_progress(s_dl.downloaded, s_dl.total_size);
+            config_update_state(UPGRADE_DOWNLOADED);
+        }
         printf("[DL] Download complete: %lu bytes, CRC=0x%08lX\r\n",
                (unsigned long)s_dl.downloaded,
                (unsigned long)(s_dl.crc ^ 0xFFFFFFFF));
@@ -207,7 +227,9 @@ void download_process(void)
         if (s_dl.retry_count >= DL_MAX_RETRIES) {
             printf("[DL] Failed after %d retries\r\n", DL_MAX_RETRIES);
             s_dl.state = DL_STATE_ERROR;
-            config_update_state(UPGRADE_FAILED);
+            if (s_dl.persist_upgrade_state) {
+                config_update_state(UPGRADE_FAILED);
+            }
             return;
         }
         printf("[DL] Chunk failed (got %ld), retry %d\r\n",
@@ -217,14 +239,17 @@ void download_process(void)
 
     if (download_write_chunk(s_dl.chunk_buf, chunk_size) < 0) {
         s_dl.state = DL_STATE_ERROR;
-        config_update_state(UPGRADE_FAILED);
+        if (s_dl.persist_upgrade_state) {
+            config_update_state(UPGRADE_FAILED);
+        }
         return;
     }
 
     s_dl.retry_count = 0;
 
     /* Throttled progress persistence */
-    if ((s_dl.downloaded - s_dl.last_persist) >= DL_PERSIST_INTERVAL) {
+    if (s_dl.persist_upgrade_state &&
+        (s_dl.downloaded - s_dl.last_persist) >= DL_PERSIST_INTERVAL) {
         s_dl.last_persist = s_dl.downloaded;
         config_update_download_progress(s_dl.downloaded, s_dl.total_size);
         printf("[DL] Progress: %lu/%lu (%lu%%)\r\n",
@@ -273,6 +298,9 @@ int download_resume(const char *url, uint16_t port)
     s_dl.downloaded = cfg->download_progress;
     s_dl.state = DL_STATE_DOWNLOADING;
     s_dl.retry_count = 0;
+    s_dl.flash_base = EXT_DOWNLOAD_BASE;
+    s_dl.flash_size = EXT_DOWNLOAD_SIZE;
+    s_dl.persist_upgrade_state = true;
 
     /* Recalculate CRC from already-downloaded data */
     s_dl.crc = CRC32_INIT_VALUE;
@@ -286,7 +314,7 @@ int download_resume(const char *url, uint16_t port)
     while (remaining > 0) {
         uint32_t to_read = (remaining > sizeof(read_buf))
                            ? sizeof(read_buf) : remaining;
-        W25Q64_Read(EXT_DOWNLOAD_BASE + offset, read_buf, to_read);
+        W25Q64_Read(s_dl.flash_base + offset, read_buf, to_read);
         s_dl.crc = CRC32_Update(s_dl.crc, read_buf, to_read);
         offset += to_read;
         remaining -= to_read;
@@ -299,6 +327,11 @@ int download_resume(const char *url, uint16_t port)
 bool download_is_complete(void)
 {
     return (s_dl.state == DL_STATE_COMPLETE);
+}
+
+bool download_has_failed(void)
+{
+    return (s_dl.state == DL_STATE_ERROR);
 }
 
 uint32_t download_get_progress(void)

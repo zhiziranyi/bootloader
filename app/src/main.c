@@ -57,6 +57,12 @@ int main(void)
     MX_GPIO_Init();
     MX_USART1_UART_Init();
 
+    if (APP_TRIAL_CONFIRM_DELAY_MS > 0U) {
+        printf("[APP] Trial confirmation delayed for %lu ms\r\n",
+               (unsigned long)APP_TRIAL_CONFIRM_DELAY_MS);
+        HAL_Delay(APP_TRIAL_CONFIRM_DELAY_MS);
+    }
+
     if (boot_confirm_running_image() == 0) {
         printf("[APP] Trial firmware confirmed\r\n");
     }

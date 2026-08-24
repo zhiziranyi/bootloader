@@ -350,9 +350,18 @@ def start_rotate(version):
                                 "--yes", "--version", validate_version(version)])
 
 
-def start_release(version):
-    return RELEASE_RUNNER.start([tool_python_executable(), str(TOOLS_DIR / "release_firmware.py"),
-                                 "--version", validate_version(version)])
+def start_release(version, trial_confirm_delay_ms=0):
+    try:
+        trial_confirm_delay_ms = int(trial_confirm_delay_ms)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("trial confirmation delay must be an integer") from exc
+    if not 0 <= trial_confirm_delay_ms <= 60_000:
+        raise ValueError("trial confirmation delay must be between 0 and 60000 ms")
+    command = [tool_python_executable(), str(TOOLS_DIR / "release_firmware.py"),
+               "--version", validate_version(version)]
+    if trial_confirm_delay_ms:
+        command.extend(["--trial-confirm-delay-ms", str(trial_confirm_delay_ms)])
+    return RELEASE_RUNNER.start(command)
 
 
 def start_fw_server(port):

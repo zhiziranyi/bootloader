@@ -146,9 +146,12 @@ int main(void)
         if (http_init() == 0) {
             download_init();
             if (download_resume(cfg.upgrade_url, 0) == 0) {
-                while (!download_is_complete()) {
+                while (!download_is_complete() && !download_has_failed()) {
                     download_process();
                     HAL_Delay(10);
+                }
+                if (download_has_failed()) {
+                    printf("[UPGRADE] Resume download failed; keeping current slot\r\n");
                 }
             }
         } else {

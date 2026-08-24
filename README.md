@@ -9,7 +9,7 @@ Slot A v1.2.0 -> Slot B v1.2.1 -> Slot A v1.2.2
 -> Slot B v1.2.6 -> rollback Slot A -> Slot B v2.0.0 (new signing key)
 ```
 
-已实测 HTTP Range 下载、外部 Flash 读回、CRC、ECDSA 签名校验、内部 Flash 安装、试运行确认、持久化 A/B 切换、手动回滚，以及密钥轮换后的新信任链 OTA。完整交接和验证记录见 [docs/HANDOVER.md](docs/HANDOVER.md)。
+已实测 HTTP Range 下载、外部 Flash 读回、CRC、ECDSA 签名校验、内部 Flash 安装、试运行确认、持久化 A/B 切换、手动回滚，以及密钥轮换后的新信任链 OTA。完整交接和验证记录见 [docs/HANDOVER.md](docs/HANDOVER.md)；新增的实物掉电与 Factory 恢复操作见 [docs/POWER_FAIL_AND_FACTORY_VALIDATION.md](docs/POWER_FAIL_AND_FACTORY_VALIDATION.md)。
 
 ## 功能亮点
 
@@ -152,7 +152,9 @@ info
 status
 upgrade net <host:port/path.pkg>
 rollback
+factory net <host:port/slotA.pkg>
 factory
+test power install
 key show
 reboot
 help

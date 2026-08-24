@@ -21,15 +21,28 @@
 #include "drivers/flash_internal.h"
 #include "ecdsa_verify.h"
 #include "boot_display.h"
+#include "download.h"
+#include "http_client.h"
+#include "stm32f4xx_hal.h"
 #include <stdio.h>
 #include <string.h>
 
 /* Consecutive verify failures before the bootloader locks upgrades */
 #define UPGRADE_VERIFY_FAIL_LIMIT   3
+#define INSTALL_POWER_CUT_HOLD_MS    15000U
+
+/* Volatile by design: the persisted SWAPPING state is the actual recovery
+ * contract; this flag only makes the physical power-cut window observable. */
+static bool s_install_power_cut_test_armed;
 
 static uint32_t get_download_base(void)
 {
     return EXT_DOWNLOAD_BASE;
+}
+
+void upgrade_arm_install_power_cut_test(void)
+{
+    s_install_power_cut_test_armed = true;
 }
 
 int upgrade_init(void)
@@ -160,6 +173,14 @@ int upgrade_swap(active_slot_t target)
     }
 
     config_update_state(UPGRADE_SWAPPING);
+    if (s_install_power_cut_test_armed) {
+        s_install_power_cut_test_armed = false;
+        printf("[TEST] INSTALL HOLD: SWAPPING persisted. Cut power within %lu ms.\r\n",
+               (unsigned long)INSTALL_POWER_CUT_HOLD_MS);
+        boot_display_show(config_get(), "CUT POWER");
+        HAL_Delay(INSTALL_POWER_CUT_HOLD_MS);
+        printf("[TEST] INSTALL HOLD elapsed; continuing installation.\r\n");
+    }
     boot_display_show_install_progress(0U, image_size);
 
     /* Erase only the sectors covered by the image. */
@@ -304,6 +325,11 @@ int upgrade_factory_restore(void)
     fw_header_t header;
     W25Q64_Read(EXT_FACTORY_BASE, (uint8_t *)&header, sizeof(header));
 
+    if (header.target_slot != FW_TARGET_SLOT_A) {
+        printf("[UPGRADE] Factory package must target slot A\r\n");
+        return -1;
+    }
+
     uint32_t image_size = header.image_size;
     uint32_t src_addr = EXT_FACTORY_BASE + sizeof(fw_header_t);
     uint32_t dst_addr = partition_get_slot_address(SLOT_A);
@@ -352,6 +378,59 @@ int upgrade_factory_restore(void)
            (unsigned long)cfg.fw_version_major,
            (unsigned long)cfg.fw_version_minor,
            (unsigned long)cfg.fw_version_patch);
+    return 0;
+}
+
+/** Download a signed Slot-A package into the isolated factory region.
+ * This transfer intentionally does not touch OTA journal state: power loss
+ * can only leave an invalid factory image, never a bogus OTA resume. */
+int upgrade_factory_provision(const char *url)
+{
+    if (url == NULL || url[0] == '\0') {
+        printf("[FACTORY] No package URL\r\n");
+        return -1;
+    }
+    if (http_init() != 0) {
+        printf("[FACTORY] Network init failed\r\n");
+        return -1;
+    }
+
+    int32_t size = http_get_file_size(url, 0);
+    if (size <= 0 || (uint32_t)size > EXT_FACTORY_SIZE) {
+        printf("[FACTORY] Invalid package size %ld\r\n", (long)size);
+        return -1;
+    }
+
+    printf("[FACTORY] Provisioning %s (%ld bytes)\r\n", url, (long)size);
+    download_init();
+    if (download_start_to(url, 0, (uint32_t)size,
+                          EXT_FACTORY_BASE, EXT_FACTORY_SIZE, false) != 0) {
+        return -1;
+    }
+    while (!download_is_complete() && !download_has_failed()) {
+        download_process();
+        HAL_Delay(10);
+    }
+
+    if (download_has_failed()) {
+        printf("[FACTORY] Download failed; factory image not updated\r\n");
+        return -1;
+    }
+
+    if (ecdsa_verify_firmware(EXT_FACTORY_BASE) != 0) {
+        printf("[FACTORY] Signature verification failed\r\n");
+        return -1;
+    }
+
+    fw_header_t header;
+    W25Q64_Read(EXT_FACTORY_BASE, (uint8_t *)&header, sizeof(header));
+    if (header.target_slot != FW_TARGET_SLOT_A) {
+        printf("[FACTORY] Package must target slot A\r\n");
+        return -1;
+    }
+    printf("[FACTORY] Image ready: v%u.%u.%u (%lu bytes)\r\n",
+           header.ver_major, header.ver_minor, header.ver_patch,
+           (unsigned long)header.image_size);
     return 0;
 }
 

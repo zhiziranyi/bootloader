@@ -94,7 +94,9 @@ static void cmd_help(void)
         "status      - Show upgrade progress\r\n"
         "upgrade net <url> - OTA upgrade (e.g. 192.168.1.100:8080/firmware/app.pkg)\r\n"
         "rollback    - Switch active slot\r\n"
+        "factory net <url> - Provision verified Slot-A factory image\r\n"
         "factory     - Factory restore\r\n"
+        "test power install - Hold after SWAPPING for physical power-cut test\r\n"
         "key show    - Show public key status\r\n"
         "reboot      - Software reset\r\n"
         "help        - Show this list\r\n"
@@ -141,7 +143,7 @@ static void cmd_upgrade_net(const char *args)
     }
 
     /* Process download chunks */
-    while (!download_is_complete()) {
+    while (!download_is_complete() && !download_has_failed()) {
         download_process();
         HAL_Delay(10);
 
@@ -153,6 +155,11 @@ static void cmd_upgrade_net(const char *args)
             send_str(buf);
             last_pct = pct;
         }
+    }
+
+    if (download_has_failed()) {
+        send_str("\r\n[ERROR] Download failed\r\n");
+        return;
     }
 
     send_str("\r\n[OK] Download complete\r\n");
@@ -186,6 +193,21 @@ static void cmd_key_show(void)
     }
 }
 
+static void cmd_factory_net(const char *args)
+{
+    char url[128] = {0};
+    if (sscanf(args, "%127s", url) != 1) {
+        send_str("\r\nUsage: factory net <url>\r\n");
+        return;
+    }
+    send_str("\r\n[FACTORY] Writing isolated factory image...\r\n");
+    if (upgrade_factory_provision(url) == 0) {
+        send_str("[OK] Factory image provisioned and signature verified.\r\n");
+    } else {
+        send_str("[ERROR] Factory image provision failed; existing factory image was not trusted.\r\n");
+    }
+}
+
 static void process_line(void)
 {
     if (line_len == 0) return;
@@ -204,6 +226,16 @@ static void process_line(void)
         cmd_status();
     } else if (strncmp((char *)line_buf, "upgrade net ", 12) == 0) {
         cmd_upgrade_net((char *)line_buf + 12);
+    } else if (strncmp((char *)line_buf, "factory net ", 12) == 0) {
+        cmd_factory_net((char *)line_buf + 12);
+    } else if (strncmp((char *)line_buf, "test power install", 18) == 0) {
+        if (config_get()->upgrade_state != UPGRADE_VERIFIED) {
+            send_str("\r\n[TEST] First finish a verified OTA package, then run this command.\r\n");
+        } else {
+            upgrade_arm_install_power_cut_test();
+            send_str("\r\n[TEST] Starting install with a 15-second physical power-cut hold...\r\n");
+            (void)upgrade_check_and_run();
+        }
     } else if (strncmp((char *)line_buf, "rollback", 8) == 0) {
         upgrade_rollback();
         send_str("\r\nRolled back to other slot\r\n");
